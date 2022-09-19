@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pygame
 import tkinter as tk
 
@@ -8,6 +7,8 @@ HEIGHT = 600
 MASS_COLOR = (0, 0, 255)
 SPRING_COLOR = (0, 0, 0)
 TIME_STEP = 0.005
+
+update_in_progress = False
 
 
 def calculate_normal_modes(T, V):
@@ -48,7 +49,7 @@ def calculate_velocities(omegas, modes, coefficients, time):
     velocities = np.zeros(np.shape(omegas))
     for j in range(len(omegas)):
         if omegas[j] == 0:
-            velocities += modes[:, j] * coefficients[j][0] * time
+            velocities += modes[:, j] * coefficients[j][0]
         else:
             velocities += modes[:, j] * coefficients[j][0] * \
                           np.cos(omegas[j] * time) * omegas[j] - \
@@ -62,16 +63,131 @@ def quit_callback():
     ended = True
 
 
-def togglePause():
+def toggle_pause():
     global paused
+    if paused:
+        state = tk.DISABLED
+    else:
+        state = tk.NORMAL
+
+    for i in range(3):
+        amplitude_entries[i].config(state=state)
+        phase_entries[i].config(state=state)
     paused = not paused
+
+
+def set_position_function(id):
+    def set_position(name, index, mode):
+        global initial_coords, initial_speeds, coefficients, t,\
+            update_in_progress
+
+        if update_in_progress or not paused:
+            return
+
+        if t != 0:
+            initial_coords = [coords[i][0] / WIDTH for i in range(3)]
+
+        try:
+            initial_coords[id] = position_variables[id].get()
+        except:
+            pass
+
+
+        initial_speeds = velocities
+
+        coefficients = calculate_coefficients(omegas, modes,
+                                              equilib_coords,
+                                              initial_coords,
+                                              initial_speeds)
+        t = 0
+
+        phases = coefficients_to_phases(coefficients)
+
+        update_in_progress = True
+        display_mode_phases(phases)
+        update_in_progress = False
+    return set_position
+
+
+def set_velocity_function(id):
+    def set_velocity(name, index, mode):
+        global initial_coords, initial_speeds, coefficients, t, \
+            update_in_progress
+        if update_in_progress or not paused:
+            return
+
+        if t != 0:
+            initial_coords = [coords[i][0] / WIDTH for i in range(3)]
+            initial_speeds = velocities
+
+        try:
+            initial_speeds[id] = velocity_variables[id].get()
+        except:
+            pass
+
+        coefficients = calculate_coefficients(omegas, modes,
+                                              equilib_coords,
+                                              initial_coords,
+                                              initial_speeds)
+        t = 0
+
+        phases = coefficients_to_phases(coefficients)
+
+        update_in_progress = True
+        display_mode_phases(phases)
+        update_in_progress = False
+    return set_velocity
+
+
+def set_mode_function(id):
+    def set_mode(name, index, mode):
+        global t, update_in_progress
+        if update_in_progress or not paused:
+            return
+
+        try:
+            t = 0
+            phase = np.deg2rad(phase_variables[id].get())
+            amplitude = amplitude_variables[id].get() / 100
+
+            coefficients[id][0] = amplitude * np.cos(phase)
+            coefficients[id][1] = amplitude * np.sin(phase)
+
+            deltas = calculate_positions(omegas, modes, coefficients, t)
+            velocities = calculate_velocities(omegas, modes, coefficients, t)
+
+            update_in_progress = True
+            for i in range(3):
+                position_variables[i].set(round(deltas[i]+equilib_coords[i], 3))
+                velocity_variables[i].set(round(velocities[i], 3))
+            update_in_progress = False
+
+
+        except:
+            pass
+    return set_mode
+
+
+def coefficients_to_phases(coefficients):
+    phases = []
+    for coefficient in coefficients:
+        phase = np.rad2deg(np.arctan2(coefficient[1], coefficient[0]))
+        amplitude = np.linalg.norm(coefficient)
+        phases.append([phase, amplitude])
+    return phases
+
+
+def display_mode_phases(phases):
+    for i in range(3):
+        phase_variables[i].set(phases[i][0])
+        amplitude_variables[i].set(round(100 * phases[i][1], 3))
 
 
 if __name__ == "__main__":
     # Coordinates given as fractions of window width
     equilib_coords = [0.25, 0.5, 0.75]
     initial_coords = [0.25, 0.5, 0.75]
-    initial_speeds = [0.02, -0.01, -0.01]
+    initial_speeds = [0.02, -0.00, -0.02]
 
     # Kinetic Energy Tensor
     T = np.array([[1, 0, 0],
@@ -105,7 +221,7 @@ if __name__ == "__main__":
     main_dialog = tk.Frame(root)
 
     # Create and Place Pause Button
-    pause_button = tk.Button(main_dialog, text="Pause", command=togglePause)
+    pause_button = tk.Button(main_dialog, text="Pause", command=toggle_pause)
     pause_button.grid(row=0, column=0)
 
     # Create Position Inputs and Labels
@@ -128,15 +244,18 @@ if __name__ == "__main__":
     amplitude_variables = [tk.DoubleVar() for i in range(3)]
     amplitude_labels = [tk.Label(main_dialog, text=f"Mode {i}: Amplitude") for i in range(3)]
     amplitude_entries = [tk.Entry(main_dialog, width=6,
-                                 textvariable=amplitude_variables[i])
+                                  textvariable=amplitude_variables[i])
                          for i in range(3)]
 
     # Create Mode Phase Inputs and Labels
     phase_variables = [tk.DoubleVar() for i in range(3)]
     phase_labels = [tk.Label(main_dialog, text=f"Mode {i}: Phase") for i in range(3)]
     phase_entries = [tk.Entry(main_dialog, width=6,
-                                  textvariable=phase_variables[i])
-                         for i in range(3)]
+                              textvariable=phase_variables[i])
+                     for i in range(3)]
+
+    phases = coefficients_to_phases(coefficients)
+    display_mode_phases(phases)
 
     for i in range(3):
         start_row = 1
@@ -157,12 +276,13 @@ if __name__ == "__main__":
         position_variables[i].set(initial_coords[i])
         velocity_variables[i].set(initial_speeds[i])
 
-        amplitude = np.linalg.norm(coefficients[i])
-        phase = np.rad2deg(np.arctan2(coefficients[i][1], coefficients[i][0]))
+        position_variables[i].trace_add("write", set_position_function(i))
+        velocity_variables[i].trace_add("write", set_velocity_function(i))
+        amplitude_variables[i].trace_add("write", set_mode_function(i))
+        phase_variables[i].trace_add("write", set_mode_function(i))
 
-        amplitude_variables[i].set(round(amplitude * 100, 3))
-        phase_variables[i].set(phase)
-
+        phase_entries[i].config(state=tk.DISABLED)
+        amplitude_entries[i].config(state=tk.DISABLED)
 
     main_dialog.pack(fill=tk.BOTH, expand=True)
     ended = False
@@ -181,19 +301,6 @@ if __name__ == "__main__":
 
         if not paused:
             t += TIME_STEP
-        else:
-            try:
-
-                initial_coords = [position_variables[i].get() for i in range(3)]
-                initial_speeds = [velocity_variables[i].get() for i in range(3)]
-                coefficients = calculate_coefficients(omegas, modes,
-                                                      equilib_coords,
-                                                      initial_coords,
-                                                      initial_speeds)
-                t = 0
-
-            except:
-                pass
 
         # Calculate New Positions
         deltas = calculate_positions(omegas, modes, coefficients, t)
