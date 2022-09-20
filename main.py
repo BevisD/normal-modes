@@ -2,12 +2,14 @@ import numpy as np
 import pygame
 import tkinter as tk
 
-WIDTH = 600
+WIDTH = 1000
 HEIGHT = 600
 MASS_COLOR = (0, 0, 255)
 SPRING_COLOR = (0, 0, 0)
 TIME_STEP = 0.005
-N_MASSES = 6
+N_MASSES = 10
+LEFT_WALL_CONNECTED = False
+RIGHT_WALL_CONNECTED = False
 
 update_in_progress = False
 
@@ -32,6 +34,9 @@ class NormalModeSystem:
         self.V = np.zeros((self.n, self.n,))
         for i in range(self.n - 1):
             self.V[i:i + 2, i:i + 2] += np.array([[1, -1], [-1, 1]])
+
+        self.V[0, 0] += LEFT_WALL_CONNECTED
+        self.V[-1, -1] += RIGHT_WALL_CONNECTED
 
         # Calculate Normal Modes of the System
         self.omegas, self.modes = self.calculate_normal_modes()
@@ -111,6 +116,12 @@ class Pygame:
         for i in range(N_MASSES - 1):
             pygame.draw.line(self.screen, SPRING_COLOR,
                              coordinates[i], coordinates[i + 1])
+        if LEFT_WALL_CONNECTED:
+            pygame.draw.line(self.screen, SPRING_COLOR,
+                             (0, HEIGHT // 2), coordinates[0])
+        if RIGHT_WALL_CONNECTED:
+            pygame.draw.line(self.screen, SPRING_COLOR,
+                             (WIDTH, HEIGHT // 2), coordinates[-1])
 
         for coord in coords:
             pygame.draw.circle(self.screen, MASS_COLOR, coord, 20)
@@ -163,7 +174,7 @@ class GUI:
 
         # Create and Place Pause Button
         self.pause_button = tk.Button(self.root, text="Pause", command=toggle_pause)
-
+        self.reset_button = tk.Button(self.root, text="Reset", command=reset_modes)
         phases = modes.coefficients_to_phases()
         self.display_mode_phases(phases)
 
@@ -196,6 +207,8 @@ class GUI:
 
         self.main_dialog.pack(fill=tk.BOTH, expand=True)
         self.pause_button.pack(side=tk.LEFT)
+        self.reset_button.pack(side=tk.LEFT)
+
         self.ended = False
 
     def quit_callback(self):
@@ -300,6 +313,11 @@ def toggle_pause():
     game.paused = not game.paused
 
 
+def reset_modes():
+    modes.coefficients = np.zeros(np.shape(modes.coefficients))
+    gui.display_mode_phases(modes.coefficients)
+
+
 if __name__ == "__main__":
     modes = NormalModeSystem(N_MASSES)
     game = Pygame()
@@ -315,7 +333,7 @@ if __name__ == "__main__":
         # PyGame Events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                ended = True
+                gui.ended = True
 
         if not game.paused:
             modes.t += TIME_STEP
