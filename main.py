@@ -12,51 +12,89 @@ N_MASSES = 6
 update_in_progress = False
 
 
-def calculate_normal_modes(T, V):
-    eigenvalues, eigenvectors = np.linalg.eigh(V)
-    omegas = np.sqrt(np.abs(eigenvalues))
-    return np.round(omegas, 6), np.round(eigenvectors, 6)
+class NormalModeSystem:
+    def __init__(self, n):
+        # Coordinates given as fractions of window width
+        self.n = n
+        self.equilib_coords = [(i + 1) / (self.n + 1) for i in range(self.n)]
+        self.initial_coords = [(i + 1) / (self.n + 1) for i in range(self.n)]
+        self.initial_speeds = [0.0 for i in range(self.n)]
+        self.initial_speeds[0] = 0.05
+        self.initial_speeds[-1] = -0.05
 
+        self.current_coords = self.initial_coords
+        self.current_speeds = self.initial_speeds
 
-def calculate_coefficients(omegas, modes, equilib_coords,
-                           initial_coords, initial_speeds):
-    coeffs = np.array([(0, 0) for j in omegas], dtype=np.float64)
-    offsets = np.subtract(initial_coords, equilib_coords)
+        # Kinetic Energy Tensor
+        self.T = np.diag(np.ones(self.n))
 
-    for j in range(len(omegas)):
-        coeffs[j][1] = np.round(np.dot(offsets, modes[:, j]), 6)
-        if omegas[j] == 0:
-            coeffs[j][0] = np.round(np.dot(initial_speeds, modes[:, j]), 6)
-        else:
-            coeffs[j][0] = np.round(
-                np.dot(initial_speeds, modes[:, j]) / omegas[j], 6)
+        # Potential Energy Tensor
+        self.V = np.zeros((self.n, self.n,))
+        for i in range(self.n - 1):
+            self.V[i:i + 2, i:i + 2] += np.array([[1, -1], [-1, 1]])
 
-    return coeffs
+        # Calculate Normal Modes of the System
+        self.omegas, self.modes = self.calculate_normal_modes()
 
+        # Calculate coefficients of each normal mode
+        self.coefficients = self.calculate_coefficients()
 
-def calculate_positions(omegas, modes, coefficients, time):
-    deltas = np.zeros(N_MASSES)
-    for j in range(len(omegas)):
-        if omegas[j] == 0:
-            deltas += modes[:, j] * coefficients[j][0] * time + \
-                      modes[:, j] * coefficients[j][1]
-        else:
-            deltas += modes[:, j] * coefficients[j][0] * np.sin(omegas[j] * time) + \
-                      modes[:, j] * coefficients[j][1] * np.cos(omegas[j] * time)
-    return deltas
+        self.t = 0
 
+    def calculate_normal_modes(self):
+        eigenvalues, eigenvectors = np.linalg.eigh(self.V)
+        omegas = np.sqrt(np.abs(eigenvalues))
+        return np.round(omegas, 6), np.round(eigenvectors, 6)
 
-def calculate_velocities(omegas, modes, coefficients, time):
-    velocities = np.zeros(N_MASSES)
-    for j in range(len(omegas)):
-        if omegas[j] == 0:
-            velocities += modes[:, j] * coefficients[j][0]
-        else:
-            velocities += modes[:, j] * coefficients[j][0] * \
-                          np.cos(omegas[j] * time) * omegas[j] - \
-                          modes[:, j] * coefficients[j][1] * \
-                          np.sin(omegas[j] * time) * omegas[j]
-    return velocities
+    def calculate_coefficients(self):
+        coeffs = np.array([(0, 0) for j in self.omegas], dtype=np.float64)
+        offsets = np.subtract(self.initial_coords, self.equilib_coords)
+
+        for j in range(self.n):
+            coeffs[j][1] = np.round(np.dot(offsets, self.modes[:, j]), 6)
+            if self.omegas[j] == 0:
+                coeffs[j][0] = np.round(np.dot(self.initial_speeds, self.modes[:, j]), 6)
+            else:
+                coeffs[j][0] = np.round(
+                    np.dot(self.initial_speeds, self.modes[:, j]) / self.omegas[j], 6)
+
+        return coeffs
+
+    def calculate_positions(self):
+        offsets = np.zeros(N_MASSES)
+        for j in range(self.n):
+            if self.omegas[j] == 0:
+                offsets += self.modes[:, j] * self.coefficients[j][0] * self.t + \
+                           self.modes[:, j] * self.coefficients[j][1]
+            else:
+                offsets += self.modes[:, j] * self.coefficients[j][0] \
+                           * np.sin(self.omegas[j] * self.t) + \
+                           self.modes[:, j] * self.coefficients[j][1] \
+                           * np.cos(self.omegas[j] * self.t)
+
+        self.current_coords = np.add(offsets, self.equilib_coords)
+        return self.current_coords
+
+    def calculate_velocities(self):
+        speeds = np.zeros(N_MASSES)
+        for j in range(self.n):
+            if self.omegas[j] == 0:
+                speeds += self.modes[:, j] * self.coefficients[j][0]
+            else:
+                speeds += self.modes[:, j] * self.coefficients[j][0] * \
+                          np.cos(self.omegas[j] * self.t) * self.omegas[j] - \
+                          self.modes[:, j] * self.coefficients[j][1] * \
+                          np.sin(self.omegas[j] * self.t) * self.omegas[j]
+        self.current_speeds = speeds
+        return speeds
+
+    def coefficients_to_phases(self):
+        phases = []
+        for coefficient in self.coefficients:
+            phase = np.rad2deg(np.arctan2(coefficient[1], coefficient[0]))
+            amplitude = np.linalg.norm(coefficient)
+            phases.append([phase, amplitude])
+        return phases
 
 
 def quit_callback():
@@ -83,105 +121,82 @@ def toggle_pause():
 
 def set_position_function(id):
     def set_position(name, index, mode):
-        global initial_coords, initial_speeds, coefficients, t, \
-            update_in_progress
-
+        global update_in_progress
         if update_in_progress or not paused:
             return
 
-        if t != 0:
-            initial_coords = [coords[i][0] / WIDTH for i in range(N_MASSES)]
+        if modes.t != 0:
+            modes.initial_coords = modes.current_coords
 
         try:
-            initial_coords[id] = position_variables[id].get()
+            modes.initial_coords[id] = position_variables[id].get()
         except:
             pass
 
-        initial_speeds = velocities
+        modes.initial_speeds = modes.current_speeds
 
-        coefficients = calculate_coefficients(omegas, modes,
-                                              equilib_coords,
-                                              initial_coords,
-                                              initial_speeds)
-        t = 0
+        modes.t = 0
+        modes.coefficients = modes.calculate_coefficients()
 
-        phases = coefficients_to_phases(coefficients)
+        phases = modes.coefficients_to_phases()
 
         update_in_progress = True
         display_mode_phases(phases)
         update_in_progress = False
-
     return set_position
 
 
 def set_velocity_function(id):
     def set_velocity(name, index, mode):
-        global initial_coords, initial_speeds, coefficients, t, \
-            update_in_progress
+        global update_in_progress
         if update_in_progress or not paused:
             return
 
-        if t != 0:
-            initial_coords = [coords[i][0] / WIDTH for i in range(N_MASSES)]
-            initial_speeds = velocities
+        if modes.t != 0:
+            modes.initial_coords = modes.current_coords
+            modes.initial_speeds = modes.current_speeds
 
         try:
-            initial_speeds[id] = velocity_variables[id].get()
+            modes.initial_speeds[id] = velocity_variables[id].get()
         except:
             pass
 
-        coefficients = calculate_coefficients(omegas, modes,
-                                              equilib_coords,
-                                              initial_coords,
-                                              initial_speeds)
-        t = 0
+        modes.t = 0
+        modes.coefficients = modes.calculate_coefficients()
 
-        phases = coefficients_to_phases(coefficients)
+        phases = modes.coefficients_to_phases()
 
         update_in_progress = True
         display_mode_phases(phases)
         update_in_progress = False
-
     return set_velocity
 
 
 def set_mode_function(id):
     def set_mode(name, index, mode):
-        global t, update_in_progress
+        global update_in_progress
         if update_in_progress or not paused:
             return
 
         try:
-            t = 0
+            modes.t = 0
             phase = np.deg2rad(phase_variables[id].get())
             amplitude = amplitude_variables[id].get() / 100
 
-            coefficients[id][0] = amplitude * np.cos(phase)
-            coefficients[id][1] = amplitude * np.sin(phase)
+            modes.coefficients[id][0] = amplitude * np.cos(phase)
+            modes.coefficients[id][1] = amplitude * np.sin(phase)
 
-            deltas = calculate_positions(omegas, modes, coefficients, t)
-            velocities = calculate_velocities(omegas, modes, coefficients, t)
+            deltas = modes.calculate_positions()
+            speeds = modes.calculate_velocities()
 
             update_in_progress = True
             for i in range(N_MASSES):
-                position_variables[i].set(round(deltas[i] + equilib_coords[i], 3))
-                velocity_variables[i].set(round(velocities[i], 3))
+                position_variables[i].set(round(deltas[i], 3))
+                velocity_variables[i].set(round(speeds[i], 3))
             update_in_progress = False
-
-
         except:
             pass
-
     return set_mode
-
-
-def coefficients_to_phases(coefficients):
-    phases = []
-    for coefficient in coefficients:
-        phase = np.rad2deg(np.arctan2(coefficient[1], coefficient[0]))
-        amplitude = np.linalg.norm(coefficient)
-        phases.append([phase, amplitude])
-    return phases
 
 
 def display_mode_phases(phases):
@@ -191,29 +206,7 @@ def display_mode_phases(phases):
 
 
 if __name__ == "__main__":
-    # Coordinates given as fractions of window width
-    equilib_coords = [(i + 1) / (N_MASSES + 1) for i in range(N_MASSES)]
-    initial_coords = [(i + 1) / (N_MASSES + 1) for i in range(N_MASSES)]
-    initial_speeds = [0.0 for i in range(N_MASSES)]
-    initial_speeds[0] = 0.05
-    initial_speeds[-1] = -0.05
-
-    # Kinetic Energy Tensor
-    T = np.diag(np.ones(N_MASSES))
-
-    # Potential Energy Tensor
-    V = np.zeros((N_MASSES, N_MASSES,))
-    for i in range(N_MASSES - 1):
-        V[i:i + 2, i:i + 2] += np.array([[1, -1], [-1, 1]])
-
-    # Calculate Normal Modes of the System
-    omegas, modes = calculate_normal_modes(T, V)
-
-    # Calculate coefficients of each normal mode
-    coefficients = calculate_coefficients(omegas, modes, equilib_coords,
-                                          initial_coords, initial_speeds)
-
-    t = 0
+    modes = NormalModeSystem(N_MASSES)
 
     # Initialize Pygame
     pygame.init()
@@ -260,7 +253,7 @@ if __name__ == "__main__":
     # Create and Place Pause Button
     pause_button = tk.Button(root, text="Pause", command=toggle_pause)
 
-    phases = coefficients_to_phases(coefficients)
+    phases = modes.coefficients_to_phases()
     display_mode_phases(phases)
 
     for i in range(N_MASSES):
@@ -279,8 +272,8 @@ if __name__ == "__main__":
         phase_labels[i].grid(row=start_row + i, column=6)
         phase_entries[i].grid(row=start_row + i, column=7)
 
-        position_variables[i].set(initial_coords[i])
-        velocity_variables[i].set(initial_speeds[i])
+        position_variables[i].set(modes.initial_coords[i])
+        velocity_variables[i].set(modes.initial_speeds[i])
 
         position_variables[i].trace_add("write", set_position_function(i))
         velocity_variables[i].trace_add("write", set_velocity_function(i))
@@ -307,13 +300,13 @@ if __name__ == "__main__":
                 ended = True
 
         if not paused:
-            t += TIME_STEP
+            modes.t += TIME_STEP
 
         # Calculate New Positions
-        deltas = calculate_positions(omegas, modes, coefficients, t)
-        velocities = calculate_velocities(omegas, modes, coefficients, t)
+        positions = modes.calculate_positions()
+        velocities = modes.calculate_velocities()
 
-        coords = [((equilib_coords[i] + deltas[i]) * WIDTH, HEIGHT // 2)
+        coords = [(positions[i] * WIDTH, HEIGHT // 2)
                   for i in range(N_MASSES)]
 
         if not paused:
@@ -324,12 +317,11 @@ if __name__ == "__main__":
         # PyGame Display Modes
         screen.fill((255, 255, 255))
 
-        for i in range(N_MASSES-1):
-            pygame.draw.line(screen, SPRING_COLOR, coords[i], coords[i+1])
+        for i in range(N_MASSES - 1):
+            pygame.draw.line(screen, SPRING_COLOR, coords[i], coords[i + 1])
 
         for coord in coords:
             pygame.draw.circle(screen, MASS_COLOR, coord, 20)
-
 
         pygame.display.flip()
 
